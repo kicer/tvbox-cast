@@ -1,0 +1,41 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.kicer.tvboxcast'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.kicer.tvboxcast"
+        // 机顶盒：Hi3798MV310 / Android 4.4.2 (KOT49H) / SDK 19
+        minSdk 19
+        targetSdk 19
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    buildTypes {
+        debug {
+            // 探针要能 adb install，debug 签名即可
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+// 无第三方依赖：离线可用、CI 快
+dependencies {
+}
