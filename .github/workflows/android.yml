@@ -23,18 +23,41 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages
+      # ubuntu-latest 自带 Android SDK，不额外下载（setup-android 容易在 runner 上挂）
+      - name: Prepare Android SDK
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          if [ -z "$SDK" ]; then SDK=/usr/local/lib/android/sdk; fi
+          echo "Using Android SDK at $SDK"
+          ls "$SDK" || true
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+          SDKM=""
+          for c in "$SDK/cmdline-tools/latest/bin/sdkmanager" "$SDK/tools/bin/sdkmanager"; do
+            if [ -x "$c" ]; then SDKM="$c"; break; fi
+          done
+          if [ -z "$SDKM" ]; then
+            SDKM=$(command -v sdkmanager || true)
+          fi
+          echo "sdkmanager=$SDKM"
+
+          if [ -n "$SDKM" ]; then
+            yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+            "$SDKM" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          else
+            echo "::warning::sdkmanager 找不到，依赖 runner 预装组件 + AGP 自动下载"
+          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
+
+      - name: Echo toolchain
+        run: |
+          java -version
+          gradle --version
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
