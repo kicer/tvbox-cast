@@ -26,4 +26,5 @@ public class Activity extends android.content.Context {
     public void setIntent(Intent i) {}
     public Intent getIntent() { return null; }
     public void setRequestedOrientation(int o) {}
+    public final void runOnUiThread(Runnable r) {}
 }

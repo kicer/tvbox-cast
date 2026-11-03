@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 实验 2：全屏悬浮窗。4.4 时代该权限安装即授予，无需运行时申请 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- 盒子没有触屏，声明为非必需，避免被判定不兼容 -->
     <uses-feature
         android:name="android.hardware.touchscreen"

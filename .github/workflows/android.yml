@@ -44,7 +44,8 @@ jobs:
 
           if [ -n "$SDKM" ]; then
             yes | "$SDKM" --licenses > /dev/null 2>&1 || true
-            "$SDKM" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+            "$SDKM" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
+              "ndk;25.1.8937393" "cmake;3.22.1"
           else
             echo "::warning::sdkmanager 找不到，依赖 runner 预装组件 + AGP 自动下载"
           fi

@@ -35,3 +35,11 @@ find .check/stubs app/src/main/java -name '*.java' > .check/files.txt
 
 javac -source 8 -target 8 -nowarn -d .check/out @.check/files.txt
 echo "OK: Java 语法/类型自检通过（未产出 APK）"
+
+# C 部分：用最小假头做 -fsyntax-only，不链接、不产出 .so
+if command -v clang > /dev/null 2>&1; then
+  clang -fsyntax-only -Wall -Wextra -I .check/cstubs app/src/main/cpp/evgrab.c
+  echo "OK: C 语法自检通过（未产出 .so）"
+else
+  echo "skip: 没有 clang，跳过 C 自检"
+fi

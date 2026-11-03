@@ -9,5 +9,6 @@ public class TextView extends android.view.View {
     public void setTextColor(int c) {}
     public void setTextSize(float s) {}
     public void setTypeface(Typeface t) {}
+    public void setGravity(int g) {}
     public CharSequence getText() { return null; }
 }

@@ -36,18 +36,24 @@ tvbox-quiz/
 ├── .check/stubs/            # check.sh 用的最小 android stub
 ├── .github/workflows/android.yml   # GitHub Actions 出 APK
 └── app/
-    ├── build.gradle                        # minSdk 19 / targetSdk 19 / compileSdk 34
+    ├── build.gradle                        # minSdk 19 / targetSdk 19 / compileSdk 34 / NDK 25.1
     └── src/main/
         ├── AndroidManifest.xml
         ├── res/values/strings.xml
+        ├── cpp/
+        │   ├── CMakeLists.txt
+        │   └── evgrab.c                    # EVIOCGRAB 独占 event0 + JNI 回调
         └── java/com/kicer/tvboxcast/
-            ├── BaseProbeActivity.java      # 全部逻辑：UI + dispatchKeyEvent
+            ├── BaseProbeActivity.java      # 全部逻辑：UI + 按键分发 + 两个实验
             ├── MainActivity.java           # 普通 Activity（方案 A）
             ├── HomeProbeActivity.java      # 申请 CATEGORY_HOME（方案 B），默认 disabled
+            ├── NativeGrab.java             # evgrab.c 的 Java 封装
+            ├── RawKeys.java                # Linux 输入码 ↔ Android keyCode
             └── KeyNames.java               # keyCode → 中文名
 ```
 
-包名 `com.kicer.tvboxcast`，**无任何第三方依赖**（离线可用、CI 快）。
+包名 `com.kicer.tvboxcast`，**无任何第三方 Java 依赖**（离线可用、CI 快）。
+ABI 只出 `armeabi-v7a`（盒子是 32 位 ARM）。
 
 ---
 
@@ -61,7 +67,10 @@ Actions → android → Run workflow
 打 tag v* 会自动建 Release，方便直接从电视/手机下载
 ```
 
-工作流：JDK 17 + Gradle 8.7 + `platforms;android-34` / `build-tools;34.0.0`，`gradle :app:assembleDebug`。
+工作流：JDK 17 + Gradle 8.7 + `platforms;android-34` / `build-tools;34.0.0` /
+`ndk;25.1.8937393` / `cmake;3.22.1`，`gradle :app:assembleDebug`。
+
+> v0.2.0 起带了 NDK 模块（`evgrab.c`），CI 首次跑会多下载一份 NDK，耗时会长一点。
 
 本机想先自查语法（**不产出 APK**）：
 
@@ -86,47 +95,61 @@ adb logcat -s KICERPROBE        # 另开一个窗口看
 ### 1. 屏幕上的内容
 
 ```
-KICER PROBE / MAIN   com.kicer.tvboxcast     ← 标题（HOME 模式是另一行）
-HOME(主页)   (3)                              ← 最近按下的键 + keyCode
-模式: 全部消费   前台: 是   windowFocus: 有   resume=2 pause=1
-HOME → com.ipanel.join.homed.stb/com.ipanel.join.homed.stb.HostActivity  (候选 2)
-0=回IPTV桌面  9=进直播  7=切换消费/放行  8=重读HOME  返回x3=退出
-[21:33:02.114] ENTER(OK) code=66 scan=28 src=0x101 rc=0
-[21:33:03.220] ✓ 仍在我们的界面  (after MENU(菜单))
-...
+KICER PROBE / MAIN   com.kicer.tvboxcast            ← 标题
+MENU(菜单)   (82)                                    ← 最近按下的键 + keyCode
+模式: 全部消费   前台: 是   focus: 有   res/pause=2/1
+Grab: 未抓   悬浮窗: 关   event0=Hi keyboard          ← v0.2.0 新增状态行
+HOME → com.ipanel.join.homed.stb/...  (候选 1)
+0=回桌面 1=Grab 2=Release 3=悬浮窗 4=直播 7=消费/放行 8=重读HOME 返回x3=退出
+[22:20:01.114] MENU(菜单)  code=82  scan=139  src=0x701  [act]
+[22:20:05.220] F2(直播)  linux=60  -> android=132  [raw]
 ```
 
-**`模式: 全部消费` = `dispatchKeyEvent` 对所有键 `return true`**（问题 3 的实验组）。
-按 `7` 切成 `放行` 就是对照组。
+日志行尾的来源标记：
+
+| 标记 | 含义 |
+| --- | --- |
+| `[act]` | 来自 `dispatchKeyEvent`（正常输入管线） |
+| `[raw]` | 来自 native 独占 event0（实验 1） |
+| `[ovl]` | 来自悬浮窗（实验 2） |
 
 **探针自身操作键**
 
 | 键 | 动作 |
 | --- | --- |
-| `0` | 切回 IPTV 桌面（`HostActivity`）→ 验证问题 4 |
-| `9` | 直接进直播（`LiveForHomeActivity`） |
-| `7` | 切换「全部消费 / 放行给系统」→ 验证问题 3 |
+| `0` | 回 IPTV 桌面（`HostActivity`） |
+| **`1`** | **EVIOCGRAB 独占 event0**（实验 1） |
+| **`2`** | 释放独占 |
+| **`3`** | 显示 / 隐藏全屏悬浮窗（实验 2） |
+| `4` | 进直播（`LiveForHomeActivity`） |
+| `7` | 切换「全部消费 / 放行给系统」 |
 | `8` | 重新解析当前默认 HOME |
 | `返回` ×3 | 退出探针（2.5s 内连按） |
 
-### 2. 验证问题 2 / 3 / 5（普通 Activity，方案 A）
+### 2. 实验 1：Grab 独占 event0（**最关键**）
 
-保持 `模式: 全部消费`，用**真实遥控器**依次按：
+目的：验证 `EVIOCGRAB` 能不能绕开 `system_server` 里那个厂商键策略。
 
-`菜单` → `直播` → `回看` → `主页`
+1. 保持探针在前台，按 `1`：
+   - 状态行变 `Grab: 已独占 event0` → 成功
+   - 变 `Grab: 失败: EVIOCGRAB ... (errno=1: Operation not permitted)` → **这条路不通**，记下原文
+2. 按遥控器：`菜单` → `直播` → `回看` → `主页` → 随便按几个数字/方向
+   - 出现 `[raw]` 行 → 独占生效（按键改从 native 来）
+   - `[act]` 行同时消失 → 正常，说明系统确实读不到事件了
+   - **重点看这三个危险键**：
+     - 有 `F2(直播) ... [raw]`，且 **IPTV 没有跳出来** → ✅ 逃逸问题解决
+     - IPTV 还是跳出来了 → 独占没挡住，说明钩子不在输入层
+3. 按 `2` 释放，确认遥控器恢复正常
 
-- 每次按完看屏幕：
-  - 出现了 `MENU(菜单) code=82` 这类行 → **问题 2 通过**（能拿到）
-  - 1.5s 后出现 `✓ 仍在我们的界面` → **问题 3 通过**（吃得掉）
-  - 出现 `✗ 焦点已被抢走` 或 `onPause <<< 我们失去前台` → **吃不掉**，记下是哪个键
-  - **完全没有任何日志行** → 事件没到我们这里（被更上层截走）
-- `主页` 在普通 Activity 模式下**一定**会走掉（这是系统行为，不算失败），
-  它只在 `HomeProbeActivity` 作为桌面时才可能被拦。
-- 顺便听电视有没有声音（问题 5）。
+### 3. 实验 2：全屏悬浮窗（备选，不用 NDK）
 
-对照组：按 `7` 切到 `放行`，再按 `菜单/直播/回看`，对比「跳不跳走」。
+1. 按 `3`，屏幕变成**洋红色全屏**（`TYPE_SYSTEM_ALERT` 悬浮窗）
+2. 按 `直播 / 回看 / 主页`：
+   - 洋红还在 → 悬浮窗压得住（但 IPTV 会在背后切台/出声，需配合静音）
+   - 洋红没了 → 压不住，这个方案作废
+3. 再按 `3` 关掉
 
-### 3. 验证问题 1 / 2 / 3（HOME 模式，方案 B）
+### 4. 验证问题 1 / 2 / 3（HOME 模式，方案 B）
 
 ```sh
 # 先把 HomeProbeActivity 打开
@@ -165,18 +188,23 @@ adb uninstall com.kicer.tvboxcast
 
 ---
 
-## 结果记录表（测完填这里）
+## 结果记录表（2026-11-03 实测，真实遥控器）
 
 | # | 验证项 | 结果 | 备注 |
 | --- | --- | --- | --- |
-| 1 | `pm set-home-activity` 可用 | 待测 | |
-| 2 | `菜单` keyCode 到达 | 待测 | |
-| 2 | `直播` keyCode 到达 | 待测 | |
-| 2 | `回看` keyCode 到达 | 待测 | |
-| 3 | 全部消费后画面不被抢走 | 待测 | |
-| 4 | 能切回 IPTV 桌面 | 待测 | |
-| 5 | 全屏时直播音频静音 | 待测 | |
-| — | HOME 模式能拦主页键 | 待测 | |
+| 1 | `pm set-home-activity` 可用 | ❌ **不存在** | 4.4 的 `pm` 没有该命令，方案 B 只能靠 HOME 选择器 |
+| 2 | `菜单` keyCode 到达 | ✅ 到达 | 真实按键 `code=82 scan=139 src=0x701` |
+| 2 | `直播` keyCode 到达 | ❌ **不到达** | 真机被拦；`input keyevent 132` 能到（假阳性） |
+| 2 | `回看` keyCode 到达 | ❌ **不到达** | 真机被拦 |
+| 3 | 全部消费后画面不被抢走 | ⚠️ **部分** | 菜单/方向/OK/返回/频道/数字都能吃掉；直播/回看/主页被 `system_server` 抢走 |
+| 4 | 能切回 IPTV 桌面 | ✅ 可用 | 但被顶掉后要先 `force-stop` 再 `am start` 才拿得回焦点 |
+| 5 | 全屏时直播音频静音 | ✅ 静音 | 早前实测确认 |
+| — | HOME 模式能拦主页键 | 未测 | 4.4 无 `set-home-activity`，需弹选择器 |
+
+**核心结论：`直播/回看/主页` 在 `system_server` 里就被消费了，应用层无法拦截。**
+详细证据、排除过程、可选方案见 `../tvbox-cast/KEY_INTERCEPT.md`。
+
+下一步要么 `EVIOCGRAB` 独占 `/dev/input/event0`（需 NDK），要么接受部分逃逸。
 
 ---
 
@@ -191,23 +219,25 @@ adb uninstall com.kicer.tvboxcast
 | 返回 | `KEY_BACK` | 4 | |
 | 音量 +/- | `KEY_VOLUMEUP/DOWN` | 24/25 | 可能被系统先处理 |
 | 静音 | `KEY_MUTE` | 91 | |
-| 菜单 | `KEY_MENU` | 82 | **待验证能否消费** |
-| 直播 | `KEY_F2` | 132 | **待验证** |
-| 回看 | `KEY_RECORD` | 130 | **待验证** |
-| 主页 | `KEY_HOME` | 3 | 只有 HOME 应用能拦 |
+| 菜单 | `KEY_MENU` | 82 | ✅ 可消费 |
+| 直播 | `KEY_F2` | 132 | ❌ `system_server` 截走 |
+| 回看 | `KEY_RECORD` | 130 | ❌ `system_server` 截走 |
+| 主页 | `KEY_HOME` | 3 | ❌ 只有 HOME 应用能拦 |
 
 ---
 
-## 下一步（探针测完之后）
+下一步（v0.2.0 两个实验出结果后）
 
-1. 按结果选方案：
-   - 三个键都能吃掉 → **方案 A**（普通全屏 Activity + 定时拉起），不动系统 HOME，风险最低
-   - 只有主页键跑 → **A + B**（再叠一层 `HomeProbeActivity`）
-   - 三个键都被 system 级钩子截走 → 只剩改 keylayout（全局静态）或 `EVIOCGRAB`
-2. 把 `BaseProbeActivity` 里的 UI 换成正式界面：题目 + 4 个选项 + 倒计时
-3. 题库：`assets/questions.json`（简单、可换、不依赖网络）
-4. 调度：App 内 `Handler` / `AlarmManager`，每 10 分钟拉起自己
-5. 规则待定：超时算不算错、连对后是否重置计时、惩罚是否累加
+1. **实验 1（grab）成功** → 就在这个基础上做正式答题 App：
+   - 题目弹出时 grab，结束后 release
+   - 按键全部从 native 回调，音量自己用 `AudioManager` 调
+   - 全屏 Activity（不需要改 keylayout、不需要当桌面）
+2. **实验 1 失败、实验 2（悬浮窗）成功** → 走悬浮窗 + 全程静音，
+   能保证「看不到也听不到」，但挡不住系统切台。
+3. **两个都失败** → 只能改 keylayout（永久废掉三个键，需重启），或接受部分逃逸。
+4. 正式功能：题目 UI（4 选项 + 倒计时）、题库 `assets/questions.json`、
+   每 10 分钟用 `AlarmManager` 拉起。
+5. 规则待定：超时算不算错、连对后是否重置计时、惩罚是否累加。
 
 ---
 

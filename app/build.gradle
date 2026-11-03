@@ -6,18 +6,32 @@ android {
     namespace 'com.kicer.tvboxcast'
     compileSdk 34
 
+    // evgrab.c 需要 NDK；AGP 8.1 的默认 NDK 版本
+    ndkVersion "25.1.8937393"
+
     defaultConfig {
         applicationId "com.kicer.tvboxcast"
-        // 机顶盒：Hi3798MV310 / Android 4.4.2 (KOT49H) / SDK 19
+        // 机顶盒：Hi3798MV310 / Android 4.4.2 (KOT49H) / SDK 19 / armeabi-v7a
         minSdk 19
         targetSdk 19
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 2
+        versionName "0.2.0"
+
+        ndk {
+            // 盒子只有 32 位 ARM
+            abiFilters 'armeabi-v7a'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
     }
 
     buildTypes {
         debug {
-            // 探针要能 adb install，debug 签名即可
             minifyEnabled false
         }
         release {
@@ -36,6 +50,6 @@ android {
     }
 }
 
-// 无第三方依赖：离线可用、CI 快
+// 无第三方 Java 依赖：离线可用、CI 快
 dependencies {
 }
