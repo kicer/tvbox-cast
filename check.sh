@@ -8,6 +8,24 @@ set -e
 
 cd "$(dirname "$0")" || exit 1
 
+# 关键文件存在性检查：CT 上曾因为 CMakeLists.txt 漏掉浪费过一次构建
+echo "[0/2] 文件检查"
+for f in \
+  app/build.gradle \
+  app/src/main/AndroidManifest.xml \
+  app/src/main/cpp/CMakeLists.txt \
+  app/src/main/cpp/evgrab.c \
+  app/src/main/java/com/kicer/tvboxcast/BaseProbeActivity.java \
+  app/src/main/java/com/kicer/tvboxcast/NativeGrab.java \
+  app/src/main/java/com/kicer/tvboxcast/RawKeys.java
+do
+  if [ ! -f "$f" ]; then
+    echo "缺失: $f" >&2
+    exit 1
+  fi
+done
+echo "    ok"
+
 # 找一个能用的 JDK（javac 需要真实 JDK，不是 /usr/bin/javac 占位符）
 if [ -z "$JAVA_HOME" ]; then
   for c in \
